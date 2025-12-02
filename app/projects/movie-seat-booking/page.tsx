@@ -1,352 +1,354 @@
 "use client";
 
-import React, { JSX, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-type SeatState = "available" | "selected" | "occupied";
+type Movie = {
+  title: string;
+  price: number;
+};
 
-const MOVIES = [
+const MOVIES: Movie[] = [
   { title: "Avengers: Endgame", price: 10 },
   { title: "Joker", price: 12 },
   { title: "Toy Story 4", price: 8 },
   { title: "The Lion King", price: 9 },
 ];
 
+const ROW_COUNT = 6;
+const COL_COUNT = 8;
+
+// Indices of occupied seats in row-major order, matching the original layout
+// Row 0: ........
+// Row 1: ...XX...
+// Row 2: ......XX
+// Row 3: ........
+// Row 4: ...XX...
+// Row 5: ....XXX.
+const OCCUPIED_SEAT_IDS = [11, 12, 22, 23, 35, 36, 44, 45, 46];
+
 const STORAGE_KEYS = {
-  SELECTED_SEATS: "msb_selectedSeats",
-  SELECTED_MOVIE_INDEX: "msb_selectedMovieIndex",
+  SELECTED_SEATS: "selectedSeats",
+  SELECTED_MOVIE_INDEX: "selectedMovieIndex",
+  SELECTED_MOVIE_PRICE: "selectedMoviePrice",
 };
 
-const ROWS = 6;
-const COLS = 8;
+type Seat = {
+  id: number;
+  row: number;
+  col: number;
+  occupied: boolean;
+};
 
-/**
- * Initial occupied layout derived from the original project HTML.
- * The arrays list the column indices (0-based) that are occupied in each row.
- */
-const INITIAL_OCCUPIED: number[][] = [
-  [], // row 0
-  [3, 4], // row 1
-  [6, 7], // row 2
-  [], // row 3
-  [3, 4], // row 4
-  [4, 5, 6], // row 5
-];
+const buildSeats = (): Seat[] => {
+  const totalSeats = ROW_COUNT * COL_COUNT;
+  const occupiedSet = new Set<number>(OCCUPIED_SEAT_IDS);
 
-function idxFromRowCol(row: number, col: number) {
-  return row * COLS + col;
-}
+  return Array.from({ length: totalSeats }, (_, id) => ({
+    id,
+    row: Math.floor(id / COL_COUNT),
+    col: id % COL_COUNT,
+    occupied: occupiedSet.has(id),
+  }));
+};
 
-export default function MovieSeatBooking(): JSX.Element {
-  // base layout (available / occupied), no browser APIs
-  const initialSeatStates = useMemo<SeatState[]>(() => {
-    const seats: SeatState[] = Array(ROWS * COLS).fill("available");
-    for (let r = 0; r < INITIAL_OCCUPIED.length; r++) {
-      for (const c of INITIAL_OCCUPIED[r]) {
-        seats[idxFromRowCol(r, c)] = "occupied";
-      }
-    }
-    return seats;
-  }, []);
+const ALL_SEATS: Seat[] = buildSeats();
+const AVAILABLE_SEAT_IDS: number[] = ALL_SEATS.filter((s) => !s.occupied).map(
+  (s) => s.id,
+);
 
-  // simple initial state for SSR; we will hydrate from localStorage in useEffect
-  const [seatStates, setSeatStates] = useState<SeatState[]>(initialSeatStates);
-  const [movieIndex, setMovieIndex] = useState<number>(0);
+const getAvailableIndexForSeatId = (seatId: number): number =>
+  AVAILABLE_SEAT_IDS.indexOf(seatId);
 
-  // On mount, hydrate from localStorage (runs only in browser)
+const getSeatIdFromAvailableIndex = (index: number): number | undefined =>
+  AVAILABLE_SEAT_IDS[index];
+
+export default function MovieSeatBooking() {
+  const [selectedMovieIndex, setSelectedMovieIndex] = useState(0);
+  const [selectedSeatIds, setSelectedSeatIds] = useState<number[]>([]);
+
+  const ticketPrice = useMemo(
+    () => MOVIES[selectedMovieIndex]?.price ?? 0,
+    [selectedMovieIndex],
+  );
+
+  const selectedSeatCount = selectedSeatIds.length;
+  const totalPrice = selectedSeatCount * ticketPrice;
+
+  // Hydrate from localStorage on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // hydrate seats
     try {
-      const rawSeats = window.localStorage.getItem(STORAGE_KEYS.SELECTED_SEATS);
-      const selectedFlat: number[] = rawSeats ? JSON.parse(rawSeats) : [];
-      const seats = [...initialSeatStates];
-      for (const i of selectedFlat) {
-        if (i >= 0 && i < seats.length && seats[i] !== "occupied") {
-          seats[i] = "selected";
+      const storedMovieIndex = window.localStorage.getItem(
+        STORAGE_KEYS.SELECTED_MOVIE_INDEX,
+      );
+      if (storedMovieIndex !== null) {
+        const idx = Number(storedMovieIndex);
+        if (!Number.isNaN(idx) && idx >= 0 && idx < MOVIES.length) {
+          setSelectedMovieIndex(idx);
         }
       }
-      setSeatStates(seats);
-    } catch {
-      // ignore parse errors
-      setSeatStates(initialSeatStates);
-    }
 
-    // hydrate movie index
-    try {
-      const rawIdx = window.localStorage.getItem(
-        STORAGE_KEYS.SELECTED_MOVIE_INDEX
+      const storedSeats = window.localStorage.getItem(
+        STORAGE_KEYS.SELECTED_SEATS,
       );
-      const idx = rawIdx !== null ? Number(rawIdx) : 0;
-      if (Number.isFinite(idx) && idx >= 0 && idx < MOVIES.length) {
-        setMovieIndex(idx);
+      if (storedSeats) {
+        const indices: unknown = JSON.parse(storedSeats);
+        if (Array.isArray(indices)) {
+          const ids: number[] = [];
+          indices.forEach((index) => {
+            if (typeof index === "number") {
+              const seatId = getSeatIdFromAvailableIndex(index);
+              if (typeof seatId === "number") {
+                ids.push(seatId);
+              }
+            }
+          });
+          if (ids.length > 0) {
+            setSelectedSeatIds(ids);
+          }
+        }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      // If anything goes wrong with parsing, just start fresh
+      console.error("Failed to read booking state from localStorage", err);
     }
-  }, [initialSeatStates]);
+  }, []);
 
-  // derived values
-  const ticketPrice = MOVIES[movieIndex].price;
-  const selectedCount = seatStates.filter((s) => s === "selected").length;
-  const total = selectedCount * ticketPrice;
-
-  // persist selected seats to localStorage whenever seatStates change
+  // Persist to localStorage whenever selection changes
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const selectedIndices = seatStates
-      .map((s, i) => (s === "selected" ? i : -1))
-      .filter((i) => i !== -1);
+
     try {
+      const selectedSeatIndices = selectedSeatIds
+        .map((seatId) => getAvailableIndexForSeatId(seatId))
+        .filter((idx) => idx >= 0);
+
       window.localStorage.setItem(
         STORAGE_KEYS.SELECTED_SEATS,
-        JSON.stringify(selectedIndices)
+        JSON.stringify(selectedSeatIndices),
       );
-    } catch {
-      // ignore storage errors
-    }
-  }, [seatStates]);
-
-  // persist movie index
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
       window.localStorage.setItem(
         STORAGE_KEYS.SELECTED_MOVIE_INDEX,
-        String(movieIndex)
+        String(selectedMovieIndex),
       );
-    } catch {
-      // ignore
+      window.localStorage.setItem(
+        STORAGE_KEYS.SELECTED_MOVIE_PRICE,
+        String(ticketPrice),
+      );
+    } catch (err) {
+      console.error("Failed to persist booking state to localStorage", err);
     }
-  }, [movieIndex]);
+  }, [selectedSeatIds, selectedMovieIndex, ticketPrice]);
 
-  function toggleSeat(index: number) {
-    setSeatStates((prev) => {
-      const curr = prev[index];
-      if (curr === "occupied") return prev; // no change
-      const next = [...prev];
-      next[index] = curr === "selected" ? "available" : "selected";
-      return next;
-    });
-  }
+  const handleSeatClick = (seat: Seat) => {
+    if (seat.occupied) return;
 
-  // Accessibility: keyboard toggling for seats
-  function handleSeatKey(e: React.KeyboardEvent, index: number) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      toggleSeat(index);
-    }
-  }
-
-  function resetSelection() {
-    setSeatStates((prev) =>
-      prev.map((s) => (s === "selected" ? "available" : s))
+    setSelectedSeatIds((prev) =>
+      prev.includes(seat.id)
+        ? prev.filter((id) => id !== seat.id)
+        : [...prev, seat.id],
     );
-    if (typeof window !== "undefined") {
-      try {
-        window.localStorage.removeItem(STORAGE_KEYS.SELECTED_SEATS);
-      } catch {}
+  };
+
+  const handleMovieChange: React.ChangeEventHandler<HTMLSelectElement> = (
+    event,
+  ) => {
+    const newIndex = Number(event.target.value);
+    if (!Number.isNaN(newIndex)) {
+      setSelectedMovieIndex(newIndex);
     }
-  }
+  };
+
+  const rows = useMemo(() => {
+    const grouped: Seat[][] = Array.from({ length: ROW_COUNT }, () => []);
+    ALL_SEATS.forEach((seat) => {
+      grouped[seat.row].push(seat);
+    });
+    return grouped;
+  }, []);
 
   return (
-    <div className="msb-root" role="application" aria-label="Movie Seat Booking">
-      <div className="msb-top">
-        <label htmlFor="movieSelect" className="msb-label">
-          Pick a movie:
-        </label>
+    <>
+      <div className="movie-container">
+        <label htmlFor="movie">Pick a movie:</label>
         <select
-          id="movieSelect"
-          className="msb-select"
-          value={movieIndex}
-          onChange={(e) => setMovieIndex(Number(e.target.value))}
-          aria-label="Select movie"
+          id="movie"
+          value={selectedMovieIndex}
+          onChange={handleMovieChange}
         >
-          {MOVIES.map((m, i) => (
-            <option key={m.title} value={i}>
-              {m.title} (${m.price})
+          {MOVIES.map((movie, index) => (
+            <option key={movie.title} value={index}>
+              {movie.title} (${movie.price})
             </option>
           ))}
         </select>
       </div>
 
-      <ul className="msb-showcase" aria-hidden>
+      <ul className="showcase">
         <li>
-          <div className="seat example" />
+          <div className="seat" />
           <small>N/A</small>
         </li>
         <li>
-          <div className="seat example selected" />
+          <div className="seat selected" />
           <small>Selected</small>
         </li>
         <li>
-          <div className="seat example occupied" />
+          <div className="seat occupied" />
           <small>Occupied</small>
         </li>
       </ul>
 
-      <main className="msb-container">
-        <div className="screen" aria-hidden>
-          <span className="screen-label">SCREEN</span>
-        </div>
+      <div className="container">
+        <div className="screen" />
 
-        <div className="seat-grid" role="grid" aria-label="Seats">
-          {Array.from({ length: ROWS }).map((_, row) => (
-            <div key={row} className="row" role="row">
-              {Array.from({ length: COLS }).map((_, col) => {
-                const index = idxFromRowCol(row, col);
-                const state = seatStates[index];
-                const isOccupied = state === "occupied";
-                const isSelected = state === "selected";
-                return (
-                  <button
-                    key={col}
-                    role="gridcell"
-                    aria-label={`Row ${row + 1} Seat ${col + 1} ${
-                      isOccupied ? "occupied" : isSelected ? "selected" : ""
-                    }`}
-                    title={`Row ${row + 1} Seat ${col + 1}`}
-                    className={`seat ${isOccupied ? "occupied" : ""} ${
-                      isSelected ? "selected" : ""
-                    }`}
-                    onClick={() => toggleSeat(index)}
-                    onKeyDown={(e) => handleSeatKey(e, index)}
-                    disabled={isOccupied}
-                    tabIndex={isOccupied ? -1 : 0}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </main>
+        {rows.map((rowSeats, rowIndex) => (
+          <div className="row" key={rowIndex}>
+            {rowSeats.map((seat) => {
+              const isSelected = selectedSeatIds.includes(seat.id);
+              const classNames = [
+                "seat",
+                seat.occupied && "occupied",
+                isSelected && "selected",
+              ]
+                .filter(Boolean)
+                .join(" ");
 
-      <p className="msb-text">
-        You have selected <span className="highlight">{selectedCount}</span>{" "}
-        seats for a price of $<span className="highlight">{total}</span>
-      </p>
-
-      <div className="msb-footer">
-        <button className="msb-reset" onClick={resetSelection} type="button">
-          Reset selection
-        </button>
+              return (
+                <div
+                  key={seat.id}
+                  className={classNames}
+                  onClick={() => handleSeatClick(seat)}
+                />
+              );
+            })}
+          </div>
+        ))}
       </div>
 
-      <style>{`
-        :root {
-          --bg: #242333;
-          --muted: #777;
-          --accent: #6feaf6;
-          --seat-bg: #444451;
-          --white: #fff;
-          --container-width: 520px;
+      <p className="text">
+        You have selected <span id="count">{selectedSeatCount}</span> seats for
+        a price of $<span id="total">{totalPrice}</span>
+      </p>
+
+      <style jsx global>{`
+        @import url("https://fonts.googleapis.com/css?family=Lato&display=swap");
+
+        * {
+          box-sizing: border-box;
         }
-        * { box-sizing: border-box; }
-        .msb-root {
-          min-height: 100vh;
+
+        body {
+          background-color: #242333;
+          color: #fff;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          background: var(--bg);
-          color: var(--white);
-          font-family: 'Lato', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-          padding: 28px 16px;
+          height: 100vh;
+          font-family: "Lato", sans-serif;
+          margin: 0;
         }
-        .msb-top {
-          margin: 12px 0 18px;
-          display: flex;
-          align-items: center;
-          gap: 12px;
+
+        .movie-container {
+          margin: 20px 0;
         }
-        .msb-label { font-size: 16px; }
-        .msb-select {
-          padding: 6px 12px;
-          border-radius: 6px;
-          border: none;
+
+        .movie-container select {
+          background-color: #fff;
+          border: 0;
+          border-radius: 5px;
           font-size: 14px;
-          background: #fff;
+          margin-left: 10px;
+          padding: 5px 15px 5px 15px;
+          -moz-appearance: none;
+          -webkit-appearance: none;
+          appearance: none;
         }
-        .msb-showcase {
-          display: flex;
-          gap: 18px;
-          list-style: none;
-          padding: 8px 12px;
-          margin: 0 0 18px;
-          border-radius: 8px;
-          color: var(--muted);
-          background: rgba(0,0,0,0.08);
-        }
-        .msb-showcase li {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .msb-container {
-          width: 100%;
-          max-width: var(--container-width);
+
+        .container {
           perspective: 1000px;
-          margin-bottom: 18px;
+          margin-bottom: 30px;
         }
-        .screen {
-          width: 100%;
-          height: 70px;
-          margin: 6px 0 14px;
-          background: #fff;
-          transform: rotateX(-45deg);
-          box-shadow: 0 3px 10px rgba(255,255,255,0.7);
+
+        .seat {
+          background-color: #444451;
+          height: 12px;
+          width: 15px;
+          margin: 3px;
+          border-top-left-radius: 10px;
+          border-top-right-radius: 10px;
+        }
+
+        .seat.selected {
+          background-color: #6feaf6;
+        }
+
+        .seat.occupied {
+          background-color: #fff;
+        }
+
+        .seat:nth-of-type(2) {
+          margin-right: 18px;
+        }
+
+        .seat:nth-last-of-type(2) {
+          margin-left: 18px;
+        }
+
+        .seat:not(.occupied):hover {
+          cursor: pointer;
+          transform: scale(1.2);
+        }
+
+        .showcase .seat:not(.occupied):hover {
+          cursor: default;
+          transform: scale(1);
+        }
+
+        .showcase {
+          background: rgba(0, 0, 0, 0.1);
+          padding: 5px 10px;
+          border-radius: 5px;
+          color: #777;
+          list-style-type: none;
+          display: flex;
+          justify-content: space-between;
+        }
+
+        .showcase li {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 6px;
+          margin: 0 10px;
         }
-        .screen-label {
-          color: #222;
-          font-weight: 700;
-          letter-spacing: 2px;
+
+        .showcase li small {
+          margin-left: 2px;
         }
-        .seat-grid { display: flex; flex-direction: column; gap: 6px; }
-        .row { display: flex; justify-content: center; gap: 6px; }
-        .seat {
-          background: var(--seat-bg);
-          height: 20px;
-          width: 24px;
-          border-top-left-radius: 10px;
-          border-top-right-radius: 10px;
-          border: none;
-          transition: transform 140ms ease;
-          outline: none;
-          display: inline-block;
+
+        .row {
+          display: flex;
         }
-        .seat:hover { transform: scale(1.18); cursor: pointer; }
-        .seat:active { transform: scale(1.05); }
-        .seat.selected { background: var(--accent); }
-        .seat.occupied {
-          background: var(--white);
-          cursor: default;
-          transform: none;
+
+        .screen {
+          background-color: #fff;
+          height: 70px;
+          width: 100%;
+          margin: 15px 0;
+          transform: rotateX(-45deg);
+          box-shadow: 0 3px 10px rgba(255, 255, 255, 0.7);
         }
-        .seat.example { width: 18px; height: 12px; border-radius: 4px; transform: none; }
-        .msb-text {
-          margin: 8px 0;
-          font-size: 16px;
+
+        p.text {
+          margin: 5px 0;
         }
-        .highlight { color: var(--accent); font-weight: 700; }
-        .msb-footer { margin-top: 8px; display: flex; gap: 8px; }
-        .msb-reset {
-          padding: 8px 12px;
-          background: transparent;
-          border: 1px solid rgba(255,255,255,0.12);
-          color: var(--white);
-          border-radius: 6px;
-          cursor: pointer;
-        }
-        .msb-reset:hover { background: rgba(255,255,255,0.03); }
-        @media (max-width: 520px) {
-          .seat { width: 18px; height: 14px; }
-          .msb-container { max-width: 360px; }
+
+        p.text span {
+          color: #6feaf6;
         }
       `}</style>
-    </div>
+    </>
   );
 }
