@@ -12,7 +12,7 @@ if (!fetchFn) {
 // ---------------- CONFIG ----------------
 
 // Hardcode your API key directly here (new key, not the old leaked one)
-const DEEPSEEK_API_KEY = "sk-8c1492e882ed404298d9b4672516ac46"; // <<< PUT YOUR KEY HERE
+const DEEPSEEK_API_KEY = "KEY"; // <<< PUT YOUR KEY HERE
 
 const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
 const DEEPSEEK_MODEL = "deepseek-chat";
