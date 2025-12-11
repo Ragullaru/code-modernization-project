@@ -11,11 +11,13 @@ if (!fetchFn) {
 
 // ---------------- CONFIG ----------------
 
-// Hardcode your API key directly here (new key, not the old leaked one)
-const DEEPSEEK_API_KEY = "KEY"; // <<< PUT YOUR KEY HERE
+// Put your Claude (Anthropic) API key here
+// Get it from: https://console.anthropic.com
+const CLAUDE_API_KEY = ""; // <<< REPLACE THIS
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
-const DEEPSEEK_MODEL = "deepseek-chat";
+// Claude messages endpoint + model
+const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
+const CLAUDE_MODEL = "claude-sonnet-4-5-20250929"; // or another Claude model
 
 // Folder paths
 const LEGACY_ROOT = path.resolve("app/legacy");
@@ -34,19 +36,15 @@ const BASE_PROMPT =
   "Modernize the provided webapp code while preserving full functionality and required dependencies. Produce the entire solution as a single NextJS .tsx file.";
 
 /**
- * List ONLY the projects you want to run here.
- * Names must match the folder names under app/legacy and app/projects.
- *
- * Examples (uncomment the ones you want):
- *
- * const SELECTED_PROJECTS = [
- *   "movie-seat-booking",
- *   "expense-tracker",
- *   "form-validator",
- * ];
+ * SELECTED_PROJECTS behavior:
+ * - If this array is EMPTY: run ALL projects found under app/legacy
+ * - If this array has names: ONLY run those projects
  */
 const SELECTED_PROJECTS = [
-  "typing-game",
+  // "typing-game",
+  // add more if you want:
+  // "movie-seat-booking",
+  // "expense-tracker",
 ];
 
 // ---------------- HELPERS ----------------
@@ -80,43 +78,55 @@ function buildPromptForProject(projectName, files) {
   prompt += `Project name: ${projectName}\n\n`;
   prompt += "Here are the source files:\n\n";
 
-  if (files.readme)
+  if (files.readme) {
     prompt += "README:\n```markdown\n" + files.readme + "\n```\n\n";
+  }
 
-  if (files.html)
+  if (files.html) {
     prompt += "HTML:\n```html\n" + files.html + "\n```\n\n";
+  }
 
-  if (files.js)
+  if (files.js) {
     prompt += "JavaScript:\n```javascript\n" + files.js + "\n```\n\n";
+  }
 
-  if (files.css)
+  if (files.css) {
     prompt += "CSS:\n```css\n" + files.css + "\n```\n\n";
+  }
 
   prompt +=
-    "Please output ONLY the complete Next.js .tsx page component, including all imports, in a single code block.\n";
+    "Please output ONLY the complete Next.js .tsx page component, including all imports, in a single TypeScript React code block.\n";
 
   return prompt;
 }
 
-async function callDeepSeek(prompt) {
-  if (!DEEPSEEK_API_KEY) {
-    throw new Error("No API key provided. Add your key to the script.");
+// Call Claude Messages API
+async function callClaude(prompt) {
+  if (!CLAUDE_API_KEY) {
+    throw new Error(
+      "No Claude API key provided. Put your key into CLAUDE_API_KEY at the top of the file."
+    );
   }
 
   const body = {
-    model: DEEPSEEK_MODEL,
+    model: CLAUDE_MODEL,
+    max_tokens: 4000, // adjust if needed
+    system:
+      "You are an expert at modernizing vanilla JS webapps into idiomatic Next.js 15+ TypeScript (.tsx) pages. Preserve all functionality.",
     messages: [
-      { role: "system", content: "You modernize webapps into Next.js + TypeScript." },
-      { role: "user", content: prompt },
+      {
+        role: "user",
+        content: prompt,
+      },
     ],
-    temperature: 0,
   };
 
-  const res = await fetchFn(DEEPSEEK_API_URL, {
+  const res = await fetchFn(CLAUDE_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      "x-api-key": CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
   });
@@ -124,17 +134,17 @@ async function callDeepSeek(prompt) {
   if (!res.ok) {
     const text = await res.text();
     throw new Error(
-      `DeepSeek API error: ${res.status} ${res.statusText} - ${text}`
+      `Claude API error: ${res.status} ${res.statusText} - ${text}`
     );
   }
 
   const data = await res.json();
-  const content =
-    data.choices?.[0]?.message?.content ||
-    data.choices?.[0]?.delta?.content ||
-    "";
 
-  return stripCodeFences(content);
+  // Claude returns: { content: [ { type: "text", text: "..." }, ... ] }
+  const textPart = data.content?.find((p) => p.type === "text");
+  const text = textPart?.text || "";
+
+  return stripCodeFences(text);
 }
 
 function stripCodeFences(text) {
@@ -176,11 +186,11 @@ async function processProject(projectName) {
   }
 
   console.log(`\n=== Processing: ${projectName} ===`);
-  console.log("Calling DeepSeek...");
+  console.log("Calling Claude...");
 
   try {
     const prompt = buildPromptForProject(projectName, files);
-    const tsx = await callDeepSeek(prompt);
+    const tsx = await callClaude(prompt);
 
     fs.writeFileSync(targetTsxPath, tsx, "utf8");
     console.log(`✔️ Wrote Next.js file to ${targetTsxPath}`);
